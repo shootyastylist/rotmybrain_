@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>cards — rotmybrain.com</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.css" />
+</head>
+<body>
+
+  <a href="about.html" class="corner-link logo-topleft" title="about page" aria-label="about page">
+    <img src="assets/main_logo.jpeg" alt="rotmybrain logo" />
+  </a>
+
+  <a href="upload.html" class="corner-link human-topright" title="upload meme" aria-label="upload meme">
+    <img src="assets/human.jpeg" alt="pixel human" />
+  </a>
+
+  <a href="index.html" class="back-btn" aria-label="Back to home">
+    <span class="arrow">&larr;</span><span>back</span>
+  </a>
+
+  <div class="center-wordmark bg">
+    <img src="assets/center_text.png" alt="" />
+  </div>
+
+  <main class="cards-stage">
+    <div id="loadingMsg" style="font-size: 13px; color: #888; letter-spacing: 1px;">loading…</div>
+
+    <div class="swiper rmb-swiper" style="display: none;">
+      <div class="swiper-wrapper" id="swiperWrapper"></div>
+      <div class="swiper-pagination"></div>
+      <div class="swiper-button-prev"></div>
+      <div class="swiper-button-next"></div>
+    </div>
+  </main>
+
+  <!-- Supabase + Swiper -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="supabase-config.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.js"></script>
+
+  <script>
+    const MIN_SLOTS = 8; // minimum visible cards (padded with placeholders if fewer memes exist)
+    const wrapper = document.getElementById('swiperWrapper');
+    const loadingMsg = document.getElementById('loadingMsg');
+    const swiperEl = document.querySelector('.rmb-swiper');
+    let swiper = null;
+
+    function publicUrlFor(path) {
+      const { data } = supabaseClient.storage.from('memes').getPublicUrl(path);
+      return data.publicUrl;
+    }
+
+    async function fetchCards() {
+      const { data, error } = await supabaseClient
+        .from('memes')
+        .select('*')
+        .order('posted', { ascending: false });
+      if (error) throw error;
+
+      const cards = data.map(m => ({
+        type: 'meme',
+        id: m.id,
+        name: m.name,
+        kind: m.kind || 'image',
+        storage_path: m.storage_path,
+        media: publicUrlFor(m.storage_path)
+      }));
+
+      let placeholderNum = 1;
+      while (cards.length < MIN_SLOTS) {
+        cards.push({ type: 'empty', num: placeholderNum++ });
+      }
+      return cards;
+    }
+
+    function buildSlide(card) {
+      const slide = document.createElement('div');
+      slide.className = 'swiper-slide';
+
+      const inner = document.createElement('div');
+      inner.className = 'cover-card';
+
+      if (card.type === 'empty') {
+        inner.classList.add('empty');
+        inner.innerHTML =
+          '<div class="placeholder-num">' + String(card.num).padStart(2, '0') + '</div>' +
+          '<div class="placeholder-msg">no meme here yet</div>';
+      } else {
+        let mediaEl;
+        if (card.kind === 'video') {
+          mediaEl = document.createElement('video');
+          mediaEl.src = card.media;
+          mediaEl.controls = true;
+          mediaEl.playsInline = true;
+          mediaEl.loop = true;
+          mediaEl.muted = true;
+        } else {
+          mediaEl = document.createElement('img');
+          mediaEl.src = card.media;
+          mediaEl.alt = card.name;
+        }
+        mediaEl.className = 'card-media';
+        inner.appendChild(mediaEl);
+
+        const overlay = document.createElement('div');
+        overlay.className = 'card-overlay';
+        inner.appendChild(overlay);
+
+        const title = document.createElement('div');
+        title.className = 'cover-title';
+        title.textContent = card.name;
+        inner.appendChild(title);
+
+        if (card.kind === 'image') {
+          const dl = document.createElement('button');
+          dl.type = 'button';
+          dl.className = 'download-btn';
+          dl.title = 'download';
+          dl.setAttribute('aria-label', 'download');
+          const cartIcon = document.createElement('img');
+          cartIcon.src = 'assets/cart.jpeg';
+          cartIcon.alt = '';
+          dl.appendChild(cartIcon);
+          // Pull extension from the storage path
+          const ext = (card.storage_path.split('.').pop() || 'png').toLowerCase();
+          const safeName = (card.name || 'meme').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '_') || 'meme';
+          const filename = safeName + '.' + ext;
+          dl.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            try {
+              dl.disabled = true;
+              // Fetch the file from Supabase as a blob, then trigger a real download
+              const response = await fetch(card.media);
+              if (!response.ok) throw new Error('fetch failed');
+              const blob = await response.blob();
+              const blobUrl = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = blobUrl;
+              a.download = filename;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+            } catch (err) {
+              console.error('Download failed:', err);
+              alert('Couldn\u2019t download. Try right-clicking the image and choosing \u201CSave image as\u2026\u201D');
+            } finally {
+              dl.disabled = false;
+            }
+          });
+          inner.appendChild(dl);
+        }
+
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'remove-btn';
+        removeBtn.setAttribute('aria-label', 'remove meme');
+        removeBtn.title = 'remove meme';
+        removeBtn.textContent = '\u2715';
+        removeBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          if (!confirm('Remove "' + card.name + '"? This cannot be undone.')) return;
+          await removeMeme(card);
+        });
+        inner.appendChild(removeBtn);
+      }
+      slide.appendChild(inner);
+      return slide;
+    }
+
+    async function removeMeme(card) {
+      try {
+        // 1) Delete the metadata row
+        const { error: dbErr } = await supabaseClient.from('memes').delete().eq('id', card.id);
+        if (dbErr) throw dbErr;
+        // 2) Delete the file from storage
+        const { error: stErr } = await supabaseClient.storage.from('memes').remove([card.storage_path]);
+        if (stErr) console.warn('Storage delete warning:', stErr); // non-fatal
+        await rebuild();
+      } catch (err) {
+        console.error(err);
+        alert('Couldn\u2019t remove: ' + (err.message || 'unknown error'));
+      }
+    }
+
+    function initSwiper() {
+      swiper = new Swiper('.rmb-swiper', {
+        effect: 'coverflow',
+        grabCursor: true,
+        centeredSlides: true,
+        slidesPerView: 'auto',
+        loop: true,
+        coverflowEffect: {
+          rotate: 0,
+          stretch: 0,
+          depth: 200,
+          modifier: 1,
+          slideShadows: false
+        },
+        keyboard: { enabled: true },
+        navigation: {
+          nextEl: '.swiper-button-next',
+          prevEl: '.swiper-button-prev'
+        },
+        pagination: {
+          el: '.swiper-pagination',
+          clickable: true
+        },
+        on: {
+          slideChange: function () {
+            document.querySelectorAll('.rmb-swiper video').forEach(v => v.pause());
+          }
+        }
+      });
+    }
+
+    async function rebuild() {
+      document.querySelectorAll('.rmb-swiper video').forEach(v => v.pause());
+      if (swiper) { swiper.destroy(true, true); swiper = null; }
+      wrapper.innerHTML = '';
+      try {
+        const cards = await fetchCards();
+        cards.forEach((c) => wrapper.appendChild(buildSlide(c)));
+        loadingMsg.style.display = 'none';
+        swiperEl.style.display = '';
+        initSwiper();
+      } catch (err) {
+        console.error(err);
+        loadingMsg.textContent = 'couldn\u2019t load memes — refresh to try again';
+        loadingMsg.style.color = '#c0392b';
+      }
+    }
+
+    rebuild();
+  </script>
+
+</body>
+</html>
